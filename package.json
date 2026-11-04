@@ -1,0 +1,9 @@
+{
+  "name": "nilx-drive-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "serve": "node tools/serve.mjs"
+  }
+}

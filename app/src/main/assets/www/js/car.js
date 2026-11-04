@@ -6,13 +6,14 @@ import { clamp, damp, disposeObject, TAU } from './util.js';
 const EMPTY_OBB = new OBB2(0, 0, 1, 1, 0);
 
 export class Car {
-    constructor({ data, scene, position, yaw, isPlayer = false }) {
+    constructor({ data, scene, position, yaw, isPlayer = false, customization = null }) {
         this.data = data;
         this.stats = data.stats;
         this.isPlayer = isPlayer;
         this.scene = scene;
+        this.customization = customization;
 
-        this.model = buildVehicleModel(data);
+        this.model = buildVehicleModel(data, customization);
         this.group = this.model.group;
         this.group.rotation.order = 'YXZ';
         this.group.position.copy(position);

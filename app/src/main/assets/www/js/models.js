@@ -175,6 +175,7 @@ function buildHeavy(root, vehicle) {
     return {
         deformParts,
         wheels,
+        materials,
         dimensions: { width: 2.5, length: 5.15, height: 1.9 }
     };
 }
@@ -272,11 +273,198 @@ function buildSport(root, vehicle) {
     return {
         deformParts,
         wheels,
+        materials,
         dimensions: { width: 2.28, length: 4.92, height: 1.2 }
     };
 }
 
-export function buildVehicleModel(vehicle) {
+const NEON_COLORS = {
+    'neon-none': null,
+    'neon-violet': '#8d64ff',
+    'neon-cyan': '#57e9ff',
+    'neon-pink': '#ff4ecb',
+    'neon-amber': '#ffb24d'
+};
+
+const DECAL_COLORS = {
+    'decal-none': null,
+    'decal-blade': '#57e9ff',
+    'decal-split': '#8d64ff',
+    'decal-hazard': '#ffb24d',
+    'decal-circuit': '#ff4ecb'
+};
+
+function makeDecalTexture(kind, color) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 512;
+    const context = canvas.getContext('2d');
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = color;
+    context.fillStyle = color;
+    context.lineWidth = 12;
+    context.lineCap = 'round';
+
+    if (kind === 'decal-blade') {
+        context.beginPath();
+        context.moveTo(32, 500);
+        context.lineTo(208, 14);
+        context.lineTo(238, 14);
+        context.lineTo(62, 500);
+        context.stroke();
+        context.globalAlpha = 0.45;
+        context.lineWidth = 4;
+        context.beginPath();
+        context.moveTo(8, 440);
+        context.lineTo(170, 18);
+        context.stroke();
+    } else if (kind === 'decal-split') {
+        for (const x of [52, 104, 156, 208]) {
+            context.globalAlpha = 0.2 + x / 300;
+            context.fillRect(x - 9, 30, 18, 420);
+        }
+        context.globalAlpha = 0.9;
+        context.lineWidth = 5;
+        context.beginPath();
+        context.moveTo(20, 250);
+        context.lineTo(236, 170);
+        context.stroke();
+    } else if (kind === 'decal-hazard') {
+        for (let y = -40; y < 540; y += 54) {
+            context.save();
+            context.translate(128, y);
+            context.rotate(-0.55);
+            context.globalAlpha = 0.78;
+            context.fillRect(-190, -13, 380, 26);
+            context.restore();
+        }
+    } else if (kind === 'decal-circuit') {
+        context.globalAlpha = 0.86;
+        context.lineWidth = 7;
+        const points = [[26, 460], [26, 354], [92, 354], [92, 240], [168, 240], [168, 118], [226, 118], [226, 24]];
+        context.beginPath();
+        context.moveTo(points[0][0], points[0][1]);
+        for (const [x, y] of points.slice(1)) context.lineTo(x, y);
+        context.stroke();
+        for (const [x, y] of points) {
+            context.beginPath();
+            context.arc(x, y, 9, 0, Math.PI * 2);
+            context.fill();
+        }
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = 4;
+    texture.needsUpdate = true;
+    return texture;
+}
+
+function makeGlowTexture(color) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+    const gradient = context.createRadialGradient(64, 128, 2, 64, 128, 124);
+    gradient.addColorStop(0, `${color}cc`);
+    gradient.addColorStop(0.42, `${color}52`);
+    gradient.addColorStop(1, `${color}00`);
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    return texture;
+}
+
+export function applyVehicleCustomization(model, customization = {}) {
+    if (!model?.materials) return null;
+    const { body, accent, rim } = model.materials;
+    if (body && customization.paint) body.color.set(customization.paint);
+    if (accent && customization.accent) accent.color.set(customization.accent);
+    if (rim && customization.rim) {
+        rim.color.set(customization.rim);
+        rim.metalness = 0.86;
+        rim.roughness = 0.22;
+    }
+
+    if (model.customizationExtras) {
+        model.customizationExtras.removeFromParent();
+        model.customizationExtras.traverse((object) => {
+            object.geometry?.dispose?.();
+            if (object.material) {
+                if (Array.isArray(object.material)) {
+                    object.material.forEach((entry) => {
+                        entry.map?.dispose?.();
+                        entry.dispose?.();
+                    });
+                } else {
+                    object.material.map?.dispose?.();
+                    object.material.dispose?.();
+                }
+            }
+        });
+        model.customizationExtras = null;
+    }
+
+    const extras = new THREE.Group();
+    extras.name = 'customization';
+    model.group.add(extras);
+    model.customizationExtras = extras;
+
+    const neonColor = NEON_COLORS[customization.neon] || null;
+    if (neonColor) {
+        const texture = makeGlowTexture(neonColor);
+        const glow = new THREE.Mesh(
+            new THREE.PlaneGeometry(model.dimensions.width * 1.9, model.dimensions.length * 1.12),
+            new THREE.MeshBasicMaterial({
+                map: texture,
+                transparent: true,
+                opacity: 0.7,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+                side: THREE.DoubleSide
+            })
+        );
+        glow.rotation.x = -Math.PI / 2;
+        glow.position.y = 0.06;
+        glow.renderOrder = 3;
+        extras.add(glow);
+
+        for (const side of [-1, 1]) {
+            const light = new THREE.PointLight(neonColor, 1.5, 4.6, 2);
+            light.position.set(side * model.dimensions.width * 0.38, 0.24, 0);
+            extras.add(light);
+        }
+    }
+
+    const decalColor = DECAL_COLORS[customization.decal] || null;
+    if (decalColor) {
+        const texture = makeDecalTexture(customization.decal, decalColor);
+        const sport = model.dimensions.height < 1.5;
+        const hoodWidth = sport ? 1.02 : 1.06;
+        const hoodLength = sport ? 1.15 : 1.3;
+        const decal = new THREE.Mesh(
+            new THREE.PlaneGeometry(hoodWidth, hoodLength),
+            new THREE.MeshBasicMaterial({
+                map: texture,
+                transparent: true,
+                opacity: 0.9,
+                depthWrite: false,
+                polygonOffset: true,
+                polygonOffsetFactor: -2
+            })
+        );
+        decal.rotation.x = -Math.PI / 2;
+        decal.position.set(0, sport ? 0.632 : 1.046, sport ? 1.55 : 1.53);
+        decal.renderOrder = 5;
+        extras.add(decal);
+    }
+
+    return extras;
+}
+
+export function buildVehicleModel(vehicle, customization = null) {
     const root = new THREE.Group();
     root.name = `nilx-${vehicle.id}`;
     const built = vehicle.chassis === 'sport'
@@ -291,12 +479,16 @@ export function buildVehicleModel(vehicle) {
     }
 
     root.userData.vehicleId = vehicle.id;
-    return {
+    const model = {
         group: root,
         deformParts: built.deformParts,
         frontSteerPivots,
         wheelSpinners,
         dimensions: built.dimensions,
-        wheelRadius: vehicle.chassis === 'sport' ? 0.4 : 0.46
+        wheelRadius: vehicle.chassis === 'sport' ? 0.4 : 0.46,
+        materials: built.materials,
+        customizationExtras: null
     };
+    if (customization) applyVehicleCustomization(model, customization);
+    return model;
 }

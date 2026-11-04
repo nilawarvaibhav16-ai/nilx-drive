@@ -3,12 +3,15 @@ package com.nilawarlabs.nilxdrive;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
@@ -278,6 +281,7 @@ public final class MainActivity extends Activity {
         if (!force && now - lastCheck < UPDATE_CHECK_INTERVAL_MS) return;
 
         updateCheckRunning = true;
+        deliverStatus("checking", null, null);
         updateExecutor.execute(() -> {
             HttpURLConnection connection = null;
             try {
@@ -291,6 +295,7 @@ public final class MainActivity extends Activity {
                 int status = connection.getResponseCode();
                 if (status != HttpURLConnection.HTTP_OK) {
                     if (BuildConfig.DEBUG) Log.d(TAG, "Update check skipped, HTTP " + status);
+                    deliverStatus("error", null, "GitHub returned HTTP " + status + ".");
                     return;
                 }
 
@@ -309,7 +314,10 @@ public final class MainActivity extends Activity {
                 JSONObject release = new JSONObject(body);
                 String tag = release.optString("tag_name", "").trim();
                 String latestVersion = normalizeVersion(tag);
-                if (latestVersion.isEmpty()) return;
+                if (latestVersion.isEmpty()) {
+                    deliverStatus("error", null, "The latest GitHub release has no version tag.");
+                    return;
+                }
 
                 prefs.edit().putLong(KEY_LAST_CHECK, now).apply();
 
@@ -317,6 +325,7 @@ public final class MainActivity extends Activity {
                     if (BuildConfig.DEBUG) {
                         Log.d(TAG, "Update check: up to date (latest " + latestVersion + ")");
                     }
+                    deliverStatus("up-to-date", latestVersion, null);
                     return;
                 }
 
@@ -334,11 +343,34 @@ public final class MainActivity extends Activity {
                 deliverUpdate(payload.toString());
             } catch (Exception error) {
                 if (BuildConfig.DEBUG) Log.d(TAG, "Update check failed", error);
+                deliverStatus("error", null, "The release feed could not be reached.");
             } finally {
                 if (connection != null) connection.disconnect();
                 updateCheckRunning = false;
             }
         });
+    }
+
+    private void deliverStatus(String state, @Nullable String version, @Nullable String message) {
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("state", state);
+            if (version != null) payload.put("version", version);
+            if (message != null) payload.put("message", message);
+            String safeJson = payload.toString()
+                    .replace("\u2028", "\\u2028")
+                    .replace("\u2029", "\\u2029");
+            runOnUiThread(() -> {
+                WebView view = webView;
+                if (view == null) return;
+                view.evaluateJavascript(
+                        "window.NilxDrive&&window.NilxDrive.updateStatus"
+                                + "?window.NilxDrive.updateStatus(" + safeJson + "):null",
+                        null);
+            });
+        } catch (Exception error) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "Update status unavailable", error);
+        }
     }
 
     private void deliverUpdate(String payloadJson) {
@@ -428,6 +460,31 @@ public final class MainActivity extends Activity {
         @JavascriptInterface
         public String getVersion() {
             return BuildConfig.VERSION_NAME;
+        }
+
+        @JavascriptInterface
+        public int getVersionCode() {
+            return BuildConfig.VERSION_CODE;
+        }
+
+        @SuppressWarnings("deprecation")
+        @JavascriptInterface
+        public void vibrate(int milliseconds) {
+            int duration = Math.max(10, Math.min(120, milliseconds));
+            runOnUiThread(() -> {
+                try {
+                    Vibrator vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+                    if (vibrator == null || !vibrator.hasVibrator()) return;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vibrator.vibrate(VibrationEffect.createOneShot(
+                                duration, VibrationEffect.DEFAULT_AMPLITUDE));
+                    } else {
+                        vibrator.vibrate(duration);
+                    }
+                } catch (Exception error) {
+                    if (BuildConfig.DEBUG) Log.d(TAG, "Vibration unavailable", error);
+                }
+            });
         }
 
         @JavascriptInterface

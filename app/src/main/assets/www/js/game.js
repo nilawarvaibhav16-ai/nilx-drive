@@ -4,6 +4,7 @@ import { World } from './world.js';
 import { OBB2 } from './collision.js';
 import { ParticleField } from './particles.js';
 import { InputController } from './input.js';
+import { Showroom } from './showroom.js';
 import {
     FIXED_STEP, MAX_SUBSTEPS, TAU, byId, clamp, damp, rand
 } from './util.js';
@@ -15,14 +16,28 @@ function shortestAngle(from, to) {
 }
 
 export class Game {
-    constructor({ canvas, data, prefs, ui, initialVehicle, initialWorld }) {
+    constructor({ canvas, data, prefs, settings, progress, audio, ui, initialVehicle, initialWorld }) {
         this.data = data;
         this.prefs = prefs;
+        this.settings = settings;
+        this.progress = progress;
+        this.audio = audio;
         this.ui = ui;
         this.canvas = canvas;
         this.vehicle = initialVehicle;
         this.worldProfile = initialWorld;
         this.state = 'ready';
+        this.session = null;
+        this.sessionActive = false;
+        this.sessionStartedAt = 0;
+        this.sessionStartDistance = 0;
+        this.resultReason = null;
+        this.paused = false;
+        this.lastResult = null;
+        this.endRequested = false;
+        this.damageOutAt = 0;
+        this.wasAirborne = false;
+        this.airtimeCarry = 0;
 
         this.renderer = new THREE.WebGLRenderer({
             canvas,
@@ -36,7 +51,7 @@ export class Game {
         this.renderer.toneMappingExposure = 1.03;
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        this.renderer.setClearColor(0x05080c, 1);
+        this.renderer.setClearColor(0x050407, 1);
 
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(58, 1, 0.1, 900);
@@ -49,7 +64,7 @@ export class Game {
             esp: prefs.systems.esp,
             abs: prefs.systems.abs
         };
-        this.input = new InputController();
+        this.input = new InputController({ sensitivity: settings?.data?.sensitivity || 1 });
         this.inputEnabled = false;
         this.particles = new ParticleField(this.scene);
 
@@ -68,14 +83,20 @@ export class Game {
         this.fpsFrames = 0;
         this.fps = 60;
         this.hudTimer = 0;
-        this.cameraMode = 0;
+        this.cameraMode = this.settings?.data?.camera === 'wide' ? 1 : 0;
         this.rivalTargets = [];
         this.rivalTargetIndex = 0;
         this.rivalStuckTime = 0;
 
-        this.resize = this.resize.bind(this);
-        window.addEventListener('resize', this.resize);
-        this.resize();
+        this.showroom = new Showroom();
+        this.showroom.setLayout('menu');
+        this.showroom.setQuality(this.settings?.data?.quality || 'balanced');
+        this.showroom.stage(initialVehicle, this.progress.getCustomization(initialVehicle));
+
+        this.onResize = this.onResize.bind(this);
+        window.addEventListener('resize', this.onResize);
+        this.applySettings(this.settings?.snapshot?.() || {});
+        this.onResize();
 
         this.loadWorld(initialWorld, initialVehicle, true);
         this.frame = this.frame.bind(this);
@@ -83,15 +104,79 @@ export class Game {
     }
 
     makeCar(vehicleData, spawn, isPlayer) {
+        const customization = isPlayer
+            ? this.progress.getCustomization(vehicleData)
+            : this.progress.getCustomization(vehicleData);
         const car = new Car({
             data: vehicleData,
             scene: this.scene,
             position: spawn.position.clone(),
             yaw: spawn.yaw,
-            isPlayer
+            isPlayer,
+            customization
         });
         car.onLanding = (speed) => this.handleLanding(car, speed);
         return car;
+    }
+
+    createSession() {
+        this.session = {
+            id: `run-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            distanceM: 0,
+            impacts: 0,
+            airtimeS: 0,
+            topSpeedKph: 0,
+            maxDamage: 0,
+            durationS: 0,
+            startedAt: performance.now()
+        };
+        this.sessionStartedAt = performance.now();
+        this.sessionActive = true;
+        this.endRequested = false;
+        this.damageOutAt = 0;
+        this.wasAirborne = false;
+        this.airtimeCarry = 0;
+        this.resultReason = null;
+        return this.session;
+    }
+
+    sessionSnapshot() {
+        if (!this.session) return null;
+        return {
+            ...this.session,
+            durationS: Math.max(this.session.durationS, (performance.now() - this.sessionStartedAt) / 1000),
+            maxDamage: Math.max(this.session.maxDamage, this.player?.damage || 0),
+            impacts: Math.max(this.session.impacts, this.impacts),
+            topSpeedKph: Math.max(this.session.topSpeedKph, this.player?.speedKph || 0)
+        };
+    }
+
+    trackSession(dt) {
+        if (!this.sessionActive || !this.session || !this.player) return;
+        const car = this.player;
+        const planarSpeed = Math.hypot(car.velocity.x, car.velocity.z);
+        this.session.distanceM += planarSpeed * dt;
+        this.session.topSpeedKph = Math.max(this.session.topSpeedKph, car.speedKph);
+        this.session.maxDamage = Math.max(this.session.maxDamage, car.damage);
+        this.session.impacts = Math.max(this.session.impacts, this.impacts);
+        this.session.durationS += dt;
+
+        if (car.airborne) {
+            this.airtimeCarry += dt;
+            this.wasAirborne = true;
+        } else if (this.wasAirborne) {
+            this.session.airtimeS += this.airtimeCarry;
+            this.airtimeCarry = 0;
+            this.wasAirborne = false;
+        }
+
+        if (!this.damageOutAt && car.damage >= 99.5) {
+            this.damageOutAt = this.simTime;
+        }
+        if (this.damageOutAt && this.simTime - this.damageOutAt > 1.1 && !this.endRequested) {
+            this.endRequested = true;
+            this.endRun('CHASSIS WRECKED');
+        }
     }
 
     loadWorld(profile, vehicle, initial = false) {
@@ -104,8 +189,10 @@ export class Game {
 
         this.vehicle = vehicle;
         this.worldProfile = profile;
+        this.paused = false;
         this.world = new World(profile);
         this.world.attach(this.scene);
+        this.showroom?.stage(vehicle, this.progress.getCustomization(vehicle));
 
         const rivalData = byId(this.data.vehicles, this.data.featured?.rivalVehicleId)
             || this.data.vehicles.find((entry) => entry.chassis === 'sport')
@@ -141,46 +228,92 @@ export class Game {
     }
 
     start() {
-        if (this.state === 'running' || this.ui.fatalVisible) return;
+        if (this.ui.fatalVisible || !this.world) return;
+        if (this.state === 'running' && !this.paused) return;
+        this.respawnCars();
+        this.createSession();
         this.state = 'running';
+        this.paused = false;
         this.lastTimestamp = performance.now();
         this.accumulator = 0;
         this.camInit = false;
+        this.inputEnabled = false;
         this.ui.enterGame();
+        this.input.setEnabled(true);
+        this.inputEnabled = true;
+        this.ui.setSystems(this.systems);
+        this.ui.setActiveWorld(this.worldProfile);
+        this.ui.setActiveVehicle(this.vehicle);
+        this.audio?.unlock();
+        this.audio?.resume();
+        this.audio?.setEngine(true, this.player?.rpm || 900, 0);
         this.ui.toast(`${this.worldProfile.name.toUpperCase()} // SIMULATION LIVE`, 'accent');
     }
 
     pause() {
-        if (this.state !== 'running' || this.ui.isOverlayOpen()) return;
+        if (this.state !== 'running' || this.paused) return;
+        this.paused = true;
         this.input.clear();
+        this.input.setEnabled(false);
+        this.inputEnabled = false;
+        this.audio?.setEngine(false);
         this.ui.showPause(this.stats());
     }
 
     resume() {
-        if (this.state !== 'running') return;
+        if (this.state !== 'running' || !this.paused) return;
+        this.paused = false;
         this.ui.hidePause();
         this.input.clear();
+        this.input.setEnabled(true);
+        this.inputEnabled = true;
         this.accumulator = 0;
+        this.lastTimestamp = performance.now();
+        this.audio?.resume();
+        this.audio?.setEngine(true, this.player?.rpm || 900, this.player?.speedKph || 0);
     }
 
     openGarageFromPause() {
+        if (this.state !== 'running') return;
+        this.paused = true;
         this.ui.hidePause();
-        this.ui.openSheet('garage');
+        this.ui.focusGarageVehicle?.(this.vehicle?.id);
+        this.ui.showScreen('garage', { fromPause: true });
+    }
+
+    returnToPause() {
+        if (this.state !== 'running') {
+            this.ui.showMenu();
+            return;
+        }
+        this.ui.enterGame();
+        this.paused = true;
+        this.ui.showPause(this.stats());
     }
 
     restart() {
-        if (this.state !== 'running' || !this.world) return;
+        if (!this.world) return;
         this.respawnCars();
+        this.createSession();
+        this.state = 'running';
+        this.paused = false;
+        this.accumulator = 0;
+        this.lastTimestamp = performance.now();
+        this.camInit = false;
         this.impacts = 0;
         this.milestones.clear();
         this.shake = 0;
-        this.accumulator = 0;
         this.ui.hidePause();
-        this.ui.closeSheets();
-        this.ui.toast('RIG REBUILT // DEFORMATION RESET', 'accent');
+        this.ui.enterGame();
+        this.input.setEnabled(true);
+        this.inputEnabled = true;
+        this.audio?.resume();
+        this.audio?.setEngine(true, 900, 0);
+        this.ui.toast('RIG REBUILT // NEW RUN LOGGED', 'accent');
     }
 
     respawnCars() {
+        if (!this.world) return;
         const world = this.world;
         this.player?.dispose();
         this.rival?.dispose();
@@ -190,52 +323,146 @@ export class Game {
         this.rivalStuckTime = 0;
         this.simTime = 0;
         this.camInit = false;
+        this.impacts = 0;
+        this.damageOutAt = 0;
+        this.endRequested = false;
+        this.wasAirborne = false;
+        this.airtimeCarry = 0;
     }
 
-    deployVehicle(vehicle) {
+    previewVehicle(vehicle) {
+        if (!vehicle) return;
+        this.showroom?.stage(vehicle, this.progress.getCustomization(vehicle));
+        this.ui.setActiveVehicle(vehicle);
+    }
+
+    previewCustomization(vehicle, customization) {
+        if (!vehicle) return;
+        if (this.showroom?.currentVehicle?.id === vehicle.id) {
+            this.showroom.updateCustomization(customization);
+        } else {
+            this.showroom?.stage(vehicle, customization);
+        }
+    }
+
+    deployVehicle(vehicle, { drive = true } = {}) {
         if (!vehicle || !this.world) return;
         this.vehicle = vehicle;
-        this.player?.dispose();
-        this.player = this.makeCar(vehicle, this.world.spawnPlayer, true);
-        this.impacts = 0;
-        this.milestones.clear();
-        this.shake = 0;
-        this.camInit = false;
-        this.simTime = 0;
-        this.accumulator = 0;
         this.ui.setActiveVehicle(vehicle);
         this.prefs.setSelection(vehicle.id, this.worldProfile.id);
-        this.ui.toast(`${vehicle.name.toUpperCase()} DEPLOYED // ${vehicle.chassis === 'sport' ? 'EXOTIC' : 'DERBY'} CHASSIS`, 'accent');
+        this.previewVehicle(vehicle);
+        this.ui.toast(`${vehicle.name.toUpperCase()} SELECTED // ${vehicle.chassis === 'sport' ? 'EXOTIC' : 'DERBY'} CHASSIS`, 'accent');
+        if (!drive) return;
+        if (this.state === 'running' || this.state === 'results') {
+            this.restart();
+        } else {
+            this.start();
+        }
     }
 
-    deployWorld(profile) {
+    deployWorld(profile, { drive = true } = {}) {
         if (!profile?.playable) return;
-        this.loadWorld(profile, this.vehicle, false);
-        this.ui.closeSheets();
+        if (this.world && this.worldProfile?.id === profile.id) {
+            this.ui.setActiveWorld(profile);
+            this.prefs.setSelection(this.vehicle.id, profile.id);
+        } else {
+            this.loadWorld(profile, this.vehicle, false);
+        }
+        if (drive) this.start();
     }
 
     setSystem(name, value) {
         if (!(name in this.systems)) return;
         this.systems[name] = Boolean(value);
         this.prefs.setSystem(name, Boolean(value));
+        this.ui.setSystems(this.systems);
         this.ui.toast(`${name.toUpperCase()} ${value ? 'ONLINE' : 'DISABLED'}`, value ? 'accent' : '');
     }
 
     toggleCamera() {
         this.cameraMode = (this.cameraMode + 1) % 2;
-        this.ui.toast(this.cameraMode === 0 ? 'CHASE CAMERA' : 'WIDE CHASE CAMERA');
+        const camera = this.cameraMode === 0 ? 'chase' : 'wide';
+        this.settings?.set('camera', camera);
+        this.ui.toast(camera === 'chase' ? 'CHASE CAMERA' : 'WIDE CHASE CAMERA');
     }
 
     hostPause() {
-        if (this.state === 'running') this.pause();
+        if (this.state === 'running' && !this.paused) this.pause();
     }
 
     stats() {
         return {
             speedKph: this.player?.speedKph || 0,
             damage: this.player?.damage || 0,
-            impacts: this.impacts
+            impacts: this.impacts,
+            session: this.sessionSnapshot()
         };
+    }
+
+    getMinimapState() {
+        if (!this.world) return null;
+        return {
+            world: this.world,
+            player: this.player ? { group: this.player.group, yaw: this.player.yaw } : null,
+            rival: this.rival ? { group: this.rival.group } : null,
+            active: this.state === 'running' && !this.paused
+        };
+    }
+
+    finalizeSession() {
+        if (!this.session) return null;
+        if (this.wasAirborne) {
+            this.session.airtimeS += this.airtimeCarry;
+            this.airtimeCarry = 0;
+            this.wasAirborne = false;
+        }
+        this.session.impacts = Math.max(this.session.impacts, this.impacts);
+        this.session.maxDamage = Math.max(this.session.maxDamage, this.player?.damage || 0);
+        this.session.topSpeedKph = Math.max(this.session.topSpeedKph, this.player?.speedKph || 0);
+        this.session.durationS = Math.max(this.session.durationS, (performance.now() - this.sessionStartedAt) / 1000);
+        return this.sessionSnapshot();
+    }
+
+    endRun(reason = 'RUN ENDED') {
+        if (this.state !== 'running' || !this.session) return null;
+        const snapshot = this.finalizeSession();
+        this.state = 'results';
+        this.paused = false;
+        this.sessionActive = false;
+        this.endRequested = true;
+        this.input.clear();
+        this.input.setEnabled(false);
+        this.inputEnabled = false;
+        this.audio?.setEngine(false);
+        this.ui.hidePause();
+        const receipt = this.progress?.awardRun(snapshot, {
+            vehicleId: this.vehicle?.id || null,
+            worldId: this.worldProfile?.id || null
+        }) || null;
+        this.lastResult = { session: snapshot, receipt, reason };
+        this.ui.showResults(snapshot, receipt, reason);
+        this.ui.setActiveVehicle(this.vehicle);
+        this.ui.setActiveWorld(this.worldProfile);
+        return this.lastResult;
+    }
+
+    goGarageFromResults() {
+        this.state = 'ready';
+        this.paused = false;
+        this.session = null;
+        this.sessionActive = false;
+        this.ui.focusGarageVehicle?.(this.vehicle?.id);
+        this.ui.showScreen('garage');
+        this.previewVehicle(this.vehicle);
+    }
+
+    goMenuFromResults() {
+        this.state = 'ready';
+        this.paused = false;
+        this.session = null;
+        this.sessionActive = false;
+        this.ui.showMenu();
+        this.previewVehicle(this.vehicle);
     }
 
     quit() {
@@ -244,14 +471,55 @@ export class Game {
                 window.NilxHost.exitGame();
                 return;
             } catch {
-                // Fall through to the browser-friendly start screen.
+                // Browser fallback below.
             }
         }
         this.state = 'ready';
-        this.ui.showStart();
+        this.paused = false;
+        this.session = null;
+        this.sessionActive = false;
         this.input.setEnabled(false);
         this.inputEnabled = false;
         this.camInit = false;
+        this.audio?.setEngine(false);
+        this.ui.showMenu();
+    }
+
+    applySettings(snapshot = {}) {
+        const quality = snapshot.quality || 'balanced';
+        const resolutionScale = Number(snapshot.resolutionScale) || 1;
+        const cap = quality === 'performance' ? 1.05 : quality === 'quality' ? 2 : 1.6;
+        this.quality = quality;
+        this.renderer.shadowMap.enabled = quality !== 'performance';
+        this.showroom?.setQuality(quality);
+        this.input.setSensitivity(snapshot.sensitivity || 1);
+        this.cameraMode = snapshot.camera === 'wide' ? 1 : 0;
+        this.renderer.setPixelRatio(
+            Math.min(window.devicePixelRatio || 1, cap) * resolutionScale
+        );
+        this.renderer.setSize(
+            Math.max(1, window.innerWidth),
+            Math.max(1, window.innerHeight),
+            false
+        );
+        document.body.classList.toggle('quality-performance', quality === 'performance');
+    }
+
+    onResize() {
+        const quality = this.quality || this.settings?.data?.quality || 'balanced';
+        const resolutionScale = Number(this.settings?.data?.resolutionScale) || 1;
+        const cap = quality === 'performance' ? 1.05 : quality === 'quality' ? 2 : 1.6;
+        this.renderer.setPixelRatio(
+            Math.min(window.devicePixelRatio || 1, cap) * resolutionScale
+        );
+        this.renderer.setSize(
+            Math.max(1, window.innerWidth),
+            Math.max(1, window.innerHeight),
+            false
+        );
+        this.camera.aspect = Math.max(1, window.innerWidth) / Math.max(1, window.innerHeight);
+        this.camera.updateProjectionMatrix();
+        this.showroom?.resize(window.innerWidth, window.innerHeight);
     }
 
     frame(timestamp) {
@@ -263,8 +531,10 @@ export class Game {
         dt = Math.min(dt, 0.12);
         this.orbit += dt * 0.17;
 
+        const blocking = Boolean(this.ui?.isBlockingOverlay?.());
         const active = this.state === 'running'
-            && !this.ui.isOverlayOpen()
+            && !this.paused
+            && !blocking
             && !document.hidden;
 
         if (active !== this.inputEnabled) {
@@ -279,6 +549,7 @@ export class Game {
                 this.simulate(FIXED_STEP);
                 this.accumulator -= FIXED_STEP;
                 steps++;
+                if (this.state !== 'running') break;
             }
             if (steps >= MAX_SUBSTEPS) this.accumulator = 0;
             this.particles.update(dt);
@@ -287,8 +558,13 @@ export class Game {
             this.accumulator = 0;
         }
 
-        this.updateCamera(dt, active);
-        this.renderer.render(this.scene, this.camera);
+        if (this.state === 'ready') {
+            this.showroom.update(dt);
+            this.renderer.render(this.showroom.scene, this.showroom.camera);
+        } else {
+            this.updateCamera(dt, active);
+            this.renderer.render(this.scene, this.camera);
+        }
 
         this.fpsAcc += dt;
         this.fpsFrames++;
@@ -307,31 +583,9 @@ export class Game {
         }
     }
 
-    resize() {
-        const width = Math.max(1, window.innerWidth);
-        const height = Math.max(1, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.85));
-        this.renderer.setSize(width, height, false);
-        this.camera.aspect = width / height;
-        this.camera.updateProjectionMatrix();
-    }
-
     updateCamera(dt, active) {
         const car = this.player;
         if (!car) return;
-
-        if (this.state === 'ready') {
-            const position = car.group.position;
-            const radius = 8.8;
-            const x = position.x + Math.sin(this.orbit) * radius;
-            const z = position.z + Math.cos(this.orbit) * radius;
-            this.camera.position.set(x, position.y + 3.5, z);
-            this.camera.lookAt(position.x, position.y + 0.85, position.z);
-            this.camera.fov = damp(this.camera.fov, 50, 2.2, dt);
-            this.camera.updateProjectionMatrix();
-            return;
-        }
-
         if (!active) return;
 
         const forwardX = Math.sin(car.yaw);
@@ -398,6 +652,7 @@ export class Game {
             this.resolveBoundary(this.rival);
         }
         this.checkMilestones();
+        this.trackSession(dt);
     }
 
     buildRivalTargets() {
@@ -661,6 +916,10 @@ export class Game {
         if (count) {
             this.impacts++;
             this.shake = Math.min(1.15, this.shake + impactSpeed * 0.02);
+            this.audio?.impact(impactSpeed);
+            if (impactSpeed > 10 && this.settings?.data?.vibration) {
+                window.NilxHost?.vibrate?.(Math.min(80, Math.round(impactSpeed * 3)));
+            }
             this.ui.flashImpact();
             if (impactSpeed > 12 && this.simTime - this.lastBigToast > 7) {
                 this.lastBigToast = this.simTime;
@@ -680,6 +939,10 @@ export class Game {
         this.particles.spawn(contact, { x: rand(-0.8, 0.8), z: rand(-0.8, 0.8) }, Math.min(26, speed * 1.9));
         if (car.isPlayer) {
             this.shake = Math.min(1.1, this.shake + speed * 0.035);
+            this.audio?.impact(speed);
+            if (speed > 9 && this.settings?.data?.vibration) {
+                window.NilxHost?.vibrate?.(Math.min(70, Math.round(speed * 2.4)));
+            }
             this.ui.flashImpact();
             if (speed > 8 && this.simTime - this.lastBigToast > 6) {
                 this.lastBigToast = this.simTime;
@@ -708,9 +971,10 @@ export class Game {
     pushTelemetry() {
         if (!this.player) return;
         const car = this.player;
+        const session = this.sessionSnapshot();
+        this.audio?.setEngine(true, car.rpm, car.speedKph);
         this.ui.updateTelemetry({
             speedKph: car.speedKph,
-            topSpeedKph: car.stats.topSpeedKph,
             gear: car.gear,
             rpm: car.rpm,
             damage: car.damage,
@@ -719,18 +983,21 @@ export class Game {
             espActive: car.espActive,
             absActive: car.absActive,
             impacts: this.impacts,
-            fps: this.fps
+            fps: this.fps,
+            session
         });
     }
 
     dispose() {
         cancelAnimationFrame(this.frameHandle);
-        window.removeEventListener('resize', this.resize);
+        window.removeEventListener('resize', this.onResize);
         this.input.clear();
+        this.input.setEnabled(false);
         this.particles?.points.removeFromParent();
         this.player?.dispose();
         this.rival?.dispose();
         this.world?.dispose();
+        this.showroom?.dispose();
         this.renderer.dispose();
     }
 }

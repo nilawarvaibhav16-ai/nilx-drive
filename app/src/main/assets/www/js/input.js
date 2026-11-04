@@ -15,10 +15,11 @@ const BLOCKED_DEFAULT_KEYS = new Set([
 ]);
 
 export class InputController {
-    constructor() {
+    constructor({ sensitivity = 1 } = {}) {
         this.keys = new Set();
         this.pointers = new Map();
         this.enabled = false;
+        this.sensitivity = Math.min(1.4, Math.max(0.6, Number(sensitivity) || 1));
 
         this.onKeyDown = this.onKeyDown.bind(this);
         this.onKeyUp = this.onKeyUp.bind(this);
@@ -45,6 +46,10 @@ export class InputController {
     setEnabled(enabled) {
         this.enabled = Boolean(enabled);
         if (!this.enabled) this.clear();
+    }
+
+    setSensitivity(value) {
+        this.sensitivity = Math.min(1.4, Math.max(0.6, Number(value) || 1));
     }
 
     onKeyDown(event) {
@@ -109,10 +114,11 @@ export class InputController {
     }
 
     snapshot() {
+        const rawSteer = (this.isActive('right') ? 1 : 0) - (this.isActive('left') ? 1 : 0);
         return {
             throttle: this.isActive('throttle') ? 1 : 0,
             brake: this.isActive('brake') ? 1 : 0,
-            steer: (this.isActive('right') ? 1 : 0) - (this.isActive('left') ? 1 : 0),
+            steer: rawSteer === 0 ? 0 : Math.max(-1, Math.min(1, rawSteer * this.sensitivity)),
             handbrake: this.isActive('handbrake')
         };
     }
