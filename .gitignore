@@ -6,8 +6,11 @@ build/
 # Local configuration file (sdk path, etc)
 local.properties
 
-# Log/OS Files
+# Log/OS files
 *.log
+.DS_Store
+Thumbs.db
+*.swp
 
 # Android Studio generated files and folders
 captures/
@@ -17,12 +20,13 @@ captures/
 *.apk
 output-metadata.json
 
-# IntelliJ
+# IntelliJ / editor
 *.iml
 .idea/
 misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
+.vscode/
 
 # Keystore files
 *.jks
@@ -31,5 +35,9 @@ render.experimental.xml
 # Google Services (e.g. APIs or Firebase)
 google-services.json
 
-# Android Profiling
+# Android profiling
 *.hprof
+
+# Generated test artifacts
+tools/runtime-*.png
+tools/emulator-*.png

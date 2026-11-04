@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#05080c">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <title>Nilx Drive | Original Vehicle Sandbox</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2305080c'/%3E%3Cpath d='M6 26 22 6h5L11 26z' fill='%23b6ff3c'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="./ui.css">
+</head>
+<body class="boot">
+<div class="stage" aria-hidden="true">
+    <canvas id="game-canvas"></canvas>
+    <div class="stage__grain"></div>
+    <div class="stage__vignette"></div>
+    <div id="impact-flash" class="impact-flash"></div>
+</div>
+
+<div id="loading-screen" class="screen screen--loading" role="status" aria-live="polite">
+    <div class="loading__mark">
+        <span class="brand-mark brand-mark--large">NX</span>
+        <span class="loading__word">NILX DRIVE</span>
+    </div>
+    <div class="loading__track"><i></i></div>
+    <p>Loading content matrix + WebGL renderer</p>
+</div>
+
+<div id="start-screen" class="screen screen--start" hidden>
+    <div class="start__wash"></div>
+    <section class="start__panel glass-panel" aria-labelledby="game-title">
+        <p class="eyebrow eyebrow--accent">NILAWARS LABS <span>//</span> ORIGINAL VEHICLE SANDBOX</p>
+        <h1 id="game-title" class="display">
+            <span>NILX</span>
+            <span class="display__outline">DRIVE</span>
+        </h1>
+        <p class="start__copy">
+            A 90 Hz soft-body collision playground built from scratch. Bend steel in the arena,
+            then open the throttle in the airport sandbox.
+        </p>
+        <div class="start__specs" aria-label="Content matrix summary">
+            <div><strong id="start-car-count">200</strong><span>vehicle shells</span></div>
+            <div><strong id="start-world-count">55</strong><span>world profiles</span></div>
+            <div><strong>3</strong><span>live assists</span></div>
+        </div>
+        <button id="start-button" class="cta cta--primary" type="button" disabled>
+            <span id="start-button-label">INITIALISING</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+        <p class="start__hint">WASD / arrows to drive · Space to drift · R to reset · G garage · M worlds</p>
+    </section>
+    <div class="start__rail" aria-hidden="true">
+        <span>SOFT-BODY / 90 HZ</span>
+        <span>ARENA + AIRPORT</span>
+        <span>TC / ESP / ABS</span>
+        <span>BUILD 1.0 / DEBUG</span>
+    </div>
+</div>
+
+<div id="hud" class="hud" aria-hidden="true">
+    <header class="topbar">
+        <div class="brand-lockup">
+            <span class="brand-mark">NX</span>
+            <span class="brand-lockup__copy">
+                <strong>NILX DRIVE</strong>
+                <small>ORIGINAL VEHICLE SANDBOX</small>
+            </span>
+        </div>
+        <div class="topbar__tools">
+            <div class="fps-pill glass-pill"><span id="fps-value">60</span><small>FPS</small></div>
+            <button class="glass-button" type="button" data-open-sheet="garage">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.5V9l2-4h12l2 4v8.5M6.5 17.5v2M17.5 17.5v2M3 12h18M7 15h.01M17 15h.01"/></svg>
+                <span>Garage</span>
+                <kbd>G</kbd>
+            </button>
+            <button class="glass-button" type="button" data-open-sheet="worlds">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.2 4 5 4 8s-1.5 5.8-4 8c-2.5-2.2-4-5-4-8s1.5-5.8 4-8z"/></svg>
+                <span>Worlds</span>
+                <kbd>M</kbd>
+            </button>
+            <button id="pause-button" class="glass-button glass-button--icon" type="button" aria-label="Pause simulation">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <div class="context-strip">
+        <div class="context-pill glass-pill">
+            <span class="status-dot" id="world-status-dot"></span>
+            <span class="context-pill__world">
+                <small id="world-type">DERBY ARENA</small>
+                <strong id="world-name">SHATTERLINE COLISEUM</strong>
+            </span>
+            <span class="context-pill__divider"></span>
+            <span class="context-pill__car">
+                <small>ACTIVE SHELL</small>
+                <strong id="car-name">VANTA BRUISER</strong>
+            </span>
+        </div>
+    </div>
+
+    <section class="dashboard glass-panel" aria-label="Vehicle dashboard">
+        <div class="dashboard__speed">
+            <span class="eyebrow">VELOCITY</span>
+            <div class="speed-readout">
+                <output id="speed-value" aria-label="Speed">000</output>
+                <span>KM/H</span>
+            </div>
+            <div class="velocity-bar"><i id="speed-fill"></i></div>
+        </div>
+
+        <div class="telemetry-grid">
+            <div class="telemetry-cell">
+                <span>GEAR</span>
+                <strong id="gear-value">N</strong>
+            </div>
+            <div class="telemetry-cell">
+                <span>ENGINE</span>
+                <strong><span id="rpm-value">850</span><small>RPM</small></strong>
+            </div>
+            <div class="telemetry-cell">
+                <span>DAMAGE</span>
+                <strong><span id="damage-value">0</span><small>%</small></strong>
+            </div>
+            <div class="telemetry-cell">
+                <span>LATERAL G</span>
+                <strong><span id="g-value">0.00</span><small>G</small></strong>
+            </div>
+        </div>
+
+        <div class="systems-panel">
+            <span class="eyebrow">ASSIST GATES</span>
+            <div class="systems-panel__row">
+                <button id="tc-toggle" class="system-toggle is-on" type="button" data-system="tc" aria-pressed="true" aria-label="Traction control">
+                    <span class="system-toggle__lamp"></span><span class="system-toggle__name">TC</span><strong>ON</strong>
+                </button>
+                <button id="esp-toggle" class="system-toggle is-on" type="button" data-system="esp" aria-pressed="true" aria-label="Electronic stability program">
+                    <span class="system-toggle__lamp"></span><span class="system-toggle__name">ESP</span><strong>ON</strong>
+                </button>
+                <button id="abs-toggle" class="system-toggle is-on" type="button" data-system="abs" aria-pressed="true" aria-label="Anti-lock braking system">
+                    <span class="system-toggle__lamp"></span><span class="system-toggle__name">ABS</span><strong>ON</strong>
+                </button>
+            </div>
+            <div class="systems-panel__meta">
+                <span id="telemetry-state">NOMINAL</span>
+                <span id="impact-count">0 IMPACTS</span>
+            </div>
+        </div>
+    </section>
+
+    <div class="touch-controls touch-controls--steer" aria-label="Steering controls">
+        <button class="touch-button" type="button" data-control="left" aria-label="Steer left">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+        </button>
+        <button class="touch-button" type="button" data-control="right" aria-label="Steer right">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+        </button>
+    </div>
+    <div class="touch-controls touch-controls--pedals" aria-label="Pedal controls">
+        <button class="touch-button touch-button--brake" type="button" data-control="brake" aria-label="Brake and reverse">
+            <span>BRAKE</span>
+        </button>
+        <button class="touch-button touch-button--throttle" type="button" data-control="throttle" aria-label="Accelerate">
+            <span>GO</span>
+        </button>
+    </div>
+
+    <p class="hud-hint">R REPAIR · SPACE HANDBRAKE · C CAMERA</p>
+</div>
+
+<div id="sheet-layer" class="modal-layer" hidden>
+    <section id="garage-sheet" class="sheet sheet--garage glass-panel" role="dialog" aria-modal="true" aria-labelledby="garage-title" hidden>
+        <header class="sheet__head">
+            <div>
+                <p class="eyebrow eyebrow--accent">CONTENT MATRIX / GARAGE</p>
+                <h2 id="garage-title">Choose a weapon.</h2>
+            </div>
+            <div class="sheet__head-tools">
+                <span class="count-chip"><strong id="garage-count">200</strong> SHELLS</span>
+                <button class="icon-button sheet-close" type="button" data-close-sheet aria-label="Close garage">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <div class="garage-layout">
+            <div class="browser-pane">
+                <div class="browser-tools">
+                    <label class="search-field">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+                        <input id="vehicle-search" type="search" placeholder="Search 200 shells" autocomplete="off" spellcheck="false">
+                    </label>
+                    <div id="vehicle-tabs" class="segmented" role="tablist" aria-label="Vehicle tier filters">
+                        <button class="segmented__button is-active" type="button" data-vehicle-filter="all" role="tab" aria-selected="true">All</button>
+                        <button class="segmented__button" type="button" data-vehicle-filter="Derby" role="tab" aria-selected="false">Derby</button>
+                        <button class="segmented__button" type="button" data-vehicle-filter="Compact" role="tab" aria-selected="false">Compact</button>
+                        <button class="segmented__button" type="button" data-vehicle-filter="Muscle" role="tab" aria-selected="false">Muscle</button>
+                        <button class="segmented__button" type="button" data-vehicle-filter="Exotic" role="tab" aria-selected="false">Exotic</button>
+                    </div>
+                </div>
+                <div id="vehicle-list" class="roster-scroll" role="listbox" aria-label="Vehicle shells"></div>
+                <div class="browser-footer">
+                    <span id="vehicle-result-count">200 results</span>
+                    <span>UNIQUE IDS / OFFLINE</span>
+                </div>
+            </div>
+
+            <aside class="detail-pane">
+                <div class="detail-heading">
+                    <span id="detail-tier" class="tier-chip">COMPACT / DERBY</span>
+                    <span id="detail-badge" class="detail-badge">SLATE &amp; RUST</span>
+                </div>
+                <h3 id="detail-vehicle-name">Vanta Bruiser</h3>
+                <p id="detail-vehicle-desc" class="detail-copy"></p>
+                <div id="vehicle-stats" class="stat-grid">
+                    <div class="stat-row"><span>POWER</span><strong id="stat-power">0 kW</strong><i><b id="bar-power"></b></i></div>
+                    <div class="stat-row"><span>TOP SPEED</span><strong id="stat-speed">0 km/h</strong><i><b id="bar-speed"></b></i></div>
+                    <div class="stat-row"><span>MASS</span><strong id="stat-mass">0 kg</strong><i><b id="bar-mass"></b></i></div>
+                    <div class="stat-row"><span>GRIP</span><strong id="stat-grip">0.00</strong><i><b id="bar-grip"></b></i></div>
+                    <div class="stat-row"><span>BRAKING</span><strong id="stat-brake">0.0</strong><i><b id="bar-brake"></b></i></div>
+                    <div class="stat-row"><span>CHASSIS</span><strong id="stat-chassis">DERBY</strong><i><b id="bar-chassis"></b></i></div>
+                </div>
+                <div class="detail-footer">
+                    <div class="detail-footer__meta">
+                        <span id="detail-drivetrain">RWD</span>
+                        <span id="detail-tag">PLAYABLE SHELL</span>
+                    </div>
+                    <button id="deploy-vehicle" class="cta cta--primary" type="button">
+                        <span>DEPLOY BUILD</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                    </button>
+                </div>
+            </aside>
+        </div>
+    </section>
+
+    <section id="world-sheet" class="sheet sheet--worlds glass-panel" role="dialog" aria-modal="true" aria-labelledby="worlds-title" hidden>
+        <header class="sheet__head">
+            <div>
+                <p class="eyebrow eyebrow--accent">CONTENT MATRIX / WORLDS</p>
+                <h2 id="worlds-title">Pick a playground.</h2>
+            </div>
+            <div class="sheet__head-tools">
+                <span class="count-chip"><strong id="world-count">55</strong> PROFILES</span>
+                <button class="icon-button sheet-close" type="button" data-close-sheet aria-label="Close worlds">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <div class="worlds-layout">
+            <div class="browser-pane">
+                <div class="browser-tools">
+                    <div id="world-tabs" class="segmented" role="tablist" aria-label="World category filters">
+                        <button class="segmented__button is-active" type="button" data-world-filter="all" role="tab" aria-selected="true">All 55</button>
+                        <button class="segmented__button" type="button" data-world-filter="Arena" role="tab" aria-selected="false">50 Arenas</button>
+                        <button class="segmented__button" type="button" data-world-filter="Open World" role="tab" aria-selected="false">5 Open</button>
+                        <button class="segmented__button" type="button" data-world-filter="playable" role="tab" aria-selected="false">Playable</button>
+                    </div>
+                </div>
+                <div id="world-list" class="world-grid" role="listbox" aria-label="World profiles"></div>
+                <div class="browser-footer">
+                    <span id="world-result-count">55 results</span>
+                    <span>2 PLAYABLE IN THIS BUILD</span>
+                </div>
+            </div>
+
+            <aside class="detail-pane detail-pane--world">
+                <div class="detail-heading">
+                    <span id="detail-world-category" class="tier-chip">ARENA</span>
+                    <span id="detail-world-status" class="detail-badge">PLAYABLE</span>
+                </div>
+                <h3 id="detail-world-name">Shatterline Coliseum</h3>
+                <p id="detail-world-desc" class="detail-copy"></p>
+                <dl class="world-facts">
+                    <div><dt>LAYOUT</dt><dd id="world-fact-layout">Oval</dd></div>
+                    <div><dt>SURFACE</dt><dd id="world-fact-surface">Cracked concrete</dd></div>
+                    <div><dt>LIGHT</dt><dd id="world-fact-light">Dusk</dd></div>
+                    <div><dt>PROFILE</dt><dd id="world-fact-profile">Arena</dd></div>
+                </dl>
+                <div id="world-hazards" class="tag-cloud" aria-label="World hazards"></div>
+                <div class="detail-footer">
+                    <div class="detail-footer__meta">
+                        <span id="world-fact-id">ARENA-01</span>
+                        <span id="world-fact-capacity">8 DRIVERS</span>
+                    </div>
+                    <button id="deploy-world" class="cta cta--primary" type="button">
+                        <span>LOAD WORLD</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                    </button>
+                </div>
+            </aside>
+        </div>
+    </section>
+</div>
+
+<div id="pause-layer" class="modal-layer" hidden>
+    <section class="pause-card glass-panel" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+        <p class="eyebrow eyebrow--accent">SIMULATION PAUSED</p>
+        <h2 id="pause-title">Hold the line.</h2>
+        <p class="pause-copy">The clock is frozen. Tune the rig or drop back into the yard.</p>
+        <div class="pause-stats">
+            <div><span>SPEED</span><strong id="pause-speed">0</strong><small>KM/H</small></div>
+            <div><span>DAMAGE</span><strong id="pause-damage">0</strong><small>%</small></div>
+            <div><span>IMPACTS</span><strong id="pause-impacts">0</strong><small>HITS</small></div>
+        </div>
+        <div class="pause-actions">
+            <button id="resume-button" class="cta cta--primary" type="button"><span>RESUME</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7V5z"/></svg>
+            </button>
+            <button id="restart-button" class="cta cta--ghost" type="button">RESET RIG</button>
+            <button id="garage-from-pause" class="cta cta--ghost" type="button">GARAGE</button>
+            <button id="quit-button" class="cta cta--ghost cta--quiet" type="button">QUIT</button>
+        </div>
+        <p class="pause-hint">Back button resumes. Quit closes Nilx Drive.</p>
+    </section>
+</div>
+
+<div id="fatal-layer" class="screen screen--fatal" hidden>
+    <div class="fatal-card glass-panel">
+        <p class="eyebrow eyebrow--accent">RENDERER OFFLINE</p>
+        <h2>Nilx Drive could not start.</h2>
+        <p id="fatal-message">The local content package failed validation.</p>
+        <button id="reload-button" class="cta cta--primary" type="button">RELOAD APP</button>
+    </div>
+</div>
+
+<div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+
+<noscript>
+    <div class="noscript">Nilx Drive requires JavaScript and WebGL.</div>
+</noscript>
+
+<script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="nilx_void">#05080C</color>
+    <color name="nilx_glass">#1AFFFFFF</color>
+    <color name="nilx_accent">#B6FF3C</color>
+    <color name="nilx_ember">#FF7A2F</color>
+</resources>
