@@ -53,7 +53,7 @@
         <span>SOFT-BODY / 90 HZ</span>
         <span>ARENA + AIRPORT</span>
         <span>TC / ESP / ABS</span>
-        <span>BUILD 1.0 / DEBUG</span>
+        <span id="build-label">BUILD 1.1.1</span>
     </div>
 </div>
 
@@ -313,6 +313,28 @@
             <button id="quit-button" class="cta cta--ghost cta--quiet" type="button">QUIT</button>
         </div>
         <p class="pause-hint">Back button resumes. Quit closes Nilx Drive.</p>
+    </section>
+</div>
+
+<div id="update-layer" class="modal-layer modal-layer--update" hidden>
+    <section class="update-card glass-panel" role="dialog" aria-modal="true" aria-labelledby="update-title">
+        <header class="update-card__head">
+            <div>
+                <p class="eyebrow eyebrow--accent">GITHUB RELEASE <span>//</span> NEW BUILD</p>
+                <h2 id="update-title">A new build is live.</h2>
+            </div>
+            <span id="update-version" class="update-version">v1.1.1</span>
+        </header>
+        <p class="update-copy">Nilx Drive has a fresh release. Read the notes, then grab it from GitHub.</p>
+        <div id="update-notes" class="update-notes" tabindex="0">Release notes will appear here.</div>
+        <div class="update-actions">
+            <button id="update-now" class="cta cta--primary" type="button">
+                <span>GET THE UPDATE</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+            </button>
+            <button id="update-later" class="cta cta--ghost" type="button">LATER</button>
+        </div>
+        <p class="update-hint">Update opens the GitHub release page in your browser. Your current install stays untouched.</p>
     </section>
 </div>
 

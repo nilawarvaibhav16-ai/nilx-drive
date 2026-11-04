@@ -17,6 +17,7 @@ No commercial vehicle models, brands, tracks, or other copyrighted assets are us
 - **Live telemetry** — speed, gear, RPM, damage, lateral G, impact count, FPS
 - **Content browsers** — searchable garage and filterable world roster
 - **Touch and keyboard controls**, pause/resume, Android back handling
+- **In-app update notices** — checks GitHub Releases on launch and shows a glass popup when a newer build is published
 - **Fully offline packaging** — vendored Three.js, no CDN or remote assets
 
 | Gameplay | Garage |
@@ -26,6 +27,12 @@ No commercial vehicle models, brands, tracks, or other copyrighted assets are us
 | Skyline Airport |
 | --- |
 | ![Airport](docs/screenshots/airport.png) |
+
+## Download
+
+Grab the latest debug APK from [GitHub Releases](https://github.com/nilawarvaibhav16-ai/nilx-drive/releases/latest).
+
+The update button inside the game opens the matching release page in your browser. The app never downloads or installs an APK by itself.
 
 ## Requirements
 

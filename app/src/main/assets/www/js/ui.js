@@ -1,6 +1,18 @@
 import { $all, clamp, formatInteger, titleCase, upper } from './util.js';
 
+const DISMISSED_UPDATE_KEY = 'nilx-drive-update-dismissed-v1';
+
 const number = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+
+function cleanReleaseNotes(text) {
+    return String(text || '')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/^\s*[-*]\s+/gm, '• ')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .trim();
+}
 
 function bar(element, ratio) {
     if (!element) return;
@@ -35,6 +47,7 @@ export class UIController {
         this.fatalVisible = false;
         this.impactCount = 0;
         this.lastTelemetry = {};
+        this.updateInfo = null;
 
         this.systems = {
             tc: prefs.systems.tc,
@@ -134,6 +147,12 @@ export class UIController {
             restartButton: need('restart-button'),
             garageFromPause: need('garage-from-pause'),
             quitButton: need('quit-button'),
+            updateLayer: need('update-layer'),
+            updateVersion: need('update-version'),
+            updateTitle: need('update-title'),
+            updateNotes: need('update-notes'),
+            updateNow: need('update-now'),
+            updateLater: need('update-later'),
             fatalLayer: need('fatal-layer'),
             fatalMessage: need('fatal-message'),
             reloadButton: need('reload-button'),
@@ -154,6 +173,8 @@ export class UIController {
         this.el.garageFromPause.addEventListener('click', () => this.actions.openGarageFromPause());
         this.el.quitButton.addEventListener('click', () => this.actions.quit());
         this.el.reloadButton.addEventListener('click', () => window.location.reload());
+        this.el.updateNow.addEventListener('click', () => this.openUpdate());
+        this.el.updateLater.addEventListener('click', () => this.dismissUpdate());
 
         for (const button of $all('[data-open-sheet]')) {
             button.addEventListener('click', () => this.openSheet(button.dataset.openSheet));
@@ -254,6 +275,11 @@ export class UIController {
 
         if (event.code === 'Escape') {
             if (this.fatalVisible) return;
+            if (!this.el.updateLayer.hidden) {
+                event.preventDefault();
+                this.dismissUpdate();
+                return;
+            }
             if (!this.el.sheetLayer.hidden) {
                 event.preventDefault();
                 this.closeSheets();
@@ -320,11 +346,73 @@ export class UIController {
         this.started = false;
         this.closeSheets();
         this.hidePause();
+        this.hideUpdate();
         document.body.classList.remove('is-entering', 'is-running', 'is-modal');
         document.body.classList.add('is-ready');
         this.el.startScreen.hidden = false;
         this.el.hud.setAttribute('aria-hidden', 'true');
         this.el.startButtonLabel.textContent = 'ENTER THE YARD';
+    }
+
+    showUpdate(info) {
+        if (this.fatalVisible || !info || typeof info.version !== 'string') return;
+
+        const version = info.version.trim();
+        const url = typeof info.url === 'string' ? info.url.trim() : '';
+        if (!version || !/^https:\/\/github\.com\/nilawarvaibhav16-ai\/nilx-drive\/releases\//.test(url)) {
+            return;
+        }
+        if (version === this.readDismissedUpdateVersion()) return;
+
+        this.updateInfo = { ...info, version, url };
+        this.el.updateVersion.textContent = info.tag || `v${version}`;
+        this.el.updateTitle.textContent = `Version ${version} is live.`;
+        this.el.updateNotes.textContent = cleanReleaseNotes(info.notes)
+            || 'A new build is available on GitHub. Open the release page for details and the latest APK.';
+
+        if (!this.el.sheetLayer.hidden) this.closeSheets();
+        if (this.started && this.el.pauseLayer.hidden) this.actions.pause();
+
+        this.el.updateLayer.hidden = false;
+        this.updateModalClass();
+        requestAnimationFrame(() => this.el.updateNow.focus({ preventScroll: true }));
+    }
+
+    dismissUpdate() {
+        if (this.updateInfo?.version) {
+            this.rememberDismissedUpdate(this.updateInfo.version);
+        }
+        this.hideUpdate();
+    }
+
+    openUpdate() {
+        const info = this.updateInfo;
+        if (!info) return;
+        this.rememberDismissedUpdate(info.version);
+        this.hideUpdate();
+        this.actions.openUpdate?.(info.url);
+    }
+
+    hideUpdate() {
+        this.el.updateLayer.hidden = true;
+        this.updateInfo = null;
+        this.updateModalClass();
+    }
+
+    readDismissedUpdateVersion() {
+        try {
+            return window.localStorage.getItem(DISMISSED_UPDATE_KEY) || '';
+        } catch {
+            return '';
+        }
+    }
+
+    rememberDismissedUpdate(version) {
+        try {
+            window.localStorage.setItem(DISMISSED_UPDATE_KEY, version);
+        } catch {
+            // Storage can be unavailable in a locked-down WebView.
+        }
     }
 
     setActiveVehicle(vehicle) {
@@ -612,7 +700,9 @@ export class UIController {
     }
 
     isOverlayOpen() {
-        return !this.el.sheetLayer.hidden || !this.el.pauseLayer.hidden;
+        return !this.el.sheetLayer.hidden
+            || !this.el.pauseLayer.hidden
+            || !this.el.updateLayer.hidden;
     }
 
     updateModalClass() {
@@ -706,12 +796,17 @@ export class UIController {
         this.el.hud.setAttribute('aria-hidden', 'true');
         this.closeSheets();
         this.hidePause();
+        this.hideUpdate();
         this.el.fatalMessage.textContent = message || 'The local content package failed validation.';
         this.el.fatalLayer.hidden = false;
     }
 
     handleBack() {
         if (this.fatalVisible) return false;
+        if (!this.el.updateLayer.hidden) {
+            this.dismissUpdate();
+            return true;
+        }
         if (!this.el.sheetLayer.hidden) {
             this.closeSheets();
             return true;

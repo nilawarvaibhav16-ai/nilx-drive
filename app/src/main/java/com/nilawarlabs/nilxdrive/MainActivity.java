@@ -2,7 +2,11 @@ package com.nilawarlabs.nilxdrive;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
@@ -26,6 +30,17 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.webkit.WebViewAssetLoader;
 
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 /**
  * Native host for the offline Nilx Drive WebGL application.
  *
@@ -38,8 +53,22 @@ public final class MainActivity extends Activity {
     private static final String ASSET_HOST = "androidplatform.net";
     private static final String START_URL = "https://" + ASSET_HOST + "/assets/www/index.html";
 
+    private static final String RELEASES_API_URL =
+            "https://api.github.com/repos/nilawarvaibhav16-ai/nilx-drive/releases/latest";
+    private static final String RELEASES_LATEST_URL =
+            "https://github.com/nilawarvaibhav16-ai/nilx-drive/releases/latest";
+    private static final String RELEASES_PATH_PREFIX =
+            "/nilawarvaibhav16-ai/nilx-drive/releases/";
+    private static final String UPDATE_PREFS = "nilx_update";
+    private static final String KEY_LAST_CHECK = "last_check";
+    private static final long UPDATE_CHECK_INTERVAL_MS = 15L * 60L * 1000L;
+    private static final int MAX_RELEASE_NOTES = 3200;
+
     @Nullable
     private WebView webView;
+
+    private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
+    private volatile boolean updateCheckRunning;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -214,6 +243,7 @@ public final class MainActivity extends Activity {
             webView.destroy();
             webView = null;
         }
+        updateExecutor.shutdownNow();
         super.onDestroy();
     }
 
@@ -239,10 +269,182 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void requestUpdateCheck(boolean force) {
+        if (webView == null || updateCheckRunning) return;
+
+        SharedPreferences prefs = getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE);
+        long now = System.currentTimeMillis();
+        long lastCheck = prefs.getLong(KEY_LAST_CHECK, 0L);
+        if (!force && now - lastCheck < UPDATE_CHECK_INTERVAL_MS) return;
+
+        updateCheckRunning = true;
+        updateExecutor.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(RELEASES_API_URL).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(8000);
+                connection.setReadTimeout(8000);
+                connection.setRequestProperty("Accept", "application/vnd.github+json");
+                connection.setRequestProperty("User-Agent", "NilxDrive/" + BuildConfig.VERSION_NAME);
+
+                int status = connection.getResponseCode();
+                if (status != HttpURLConnection.HTTP_OK) {
+                    if (BuildConfig.DEBUG) Log.d(TAG, "Update check skipped, HTTP " + status);
+                    return;
+                }
+
+                String body;
+                try (InputStream stream = connection.getInputStream();
+                     BufferedReader reader = new BufferedReader(
+                             new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                    StringBuilder builder = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        builder.append(line).append('\n');
+                    }
+                    body = builder.toString();
+                }
+
+                JSONObject release = new JSONObject(body);
+                String tag = release.optString("tag_name", "").trim();
+                String latestVersion = normalizeVersion(tag);
+                if (latestVersion.isEmpty()) return;
+
+                prefs.edit().putLong(KEY_LAST_CHECK, now).apply();
+
+                if (!isNewerVersion(latestVersion, BuildConfig.VERSION_NAME)) {
+                    if (BuildConfig.DEBUG) {
+                        Log.d(TAG, "Update check: up to date (latest " + latestVersion + ")");
+                    }
+                    return;
+                }
+
+                String releaseUrl = release.optString("html_url", "").trim();
+                if (!isAllowedReleaseUrl(releaseUrl)) releaseUrl = RELEASES_LATEST_URL;
+
+                JSONObject payload = new JSONObject();
+                payload.put("version", latestVersion);
+                payload.put("tag", tag);
+                payload.put("name", release.optString("name", tag));
+                payload.put("notes", truncate(release.optString("body", "").trim(), MAX_RELEASE_NOTES));
+                payload.put("url", releaseUrl);
+
+                if (BuildConfig.DEBUG) Log.d(TAG, "Update available: " + latestVersion);
+                deliverUpdate(payload.toString());
+            } catch (Exception error) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "Update check failed", error);
+            } finally {
+                if (connection != null) connection.disconnect();
+                updateCheckRunning = false;
+            }
+        });
+    }
+
+    private void deliverUpdate(String payloadJson) {
+        String safeJson = payloadJson
+                .replace("\u2028", "\\u2028")
+                .replace("\u2029", "\\u2029");
+        runOnUiThread(() -> {
+            WebView view = webView;
+            if (view == null) return;
+            view.evaluateJavascript(
+                    "window.NilxDrive&&window.NilxDrive.showUpdate"
+                            + "?window.NilxDrive.showUpdate(" + safeJson + "):null",
+                    null);
+        });
+    }
+
+    private static String normalizeVersion(String tag) {
+        String value = tag == null ? "" : tag.trim();
+        if (value.startsWith("v") || value.startsWith("V")) {
+            value = value.substring(1);
+        }
+        return value;
+    }
+
+    private static boolean isNewerVersion(String candidate, String current) {
+        int[] candidateParts = versionParts(candidate);
+        int[] currentParts = versionParts(current);
+        for (int index = 0; index < candidateParts.length; index++) {
+            if (candidateParts[index] != currentParts[index]) {
+                return candidateParts[index] > currentParts[index];
+            }
+        }
+        return false;
+    }
+
+    private static int[] versionParts(String version) {
+        int[] parts = new int[3];
+        if (version == null) return parts;
+
+        String[] tokens = version.split("[^0-9]+");
+        int index = 0;
+        for (String token : tokens) {
+            if (token.isEmpty()) continue;
+            try {
+                int number = Integer.parseInt(token);
+                parts[index++] = number;
+            } catch (NumberFormatException ignored) {
+                // Ignore malformed segments and keep looking at the rest.
+            }
+            if (index == parts.length) break;
+        }
+        return parts;
+    }
+
+    private static String truncate(String value, int maxLength) {
+        if (value == null) return "";
+        if (value.length() <= maxLength) return value;
+        return value.substring(0, maxLength).trim() + "\n…";
+    }
+
+    private static boolean isAllowedReleaseUrl(@Nullable String rawUrl) {
+        if (rawUrl == null) return false;
+        Uri uri = Uri.parse(rawUrl);
+        String path = uri.getPath();
+        return "https".equalsIgnoreCase(uri.getScheme())
+                && "github.com".equalsIgnoreCase(uri.getHost())
+                && path != null
+                && path.startsWith(RELEASES_PATH_PREFIX);
+    }
+
     private final class LocalBridge {
         @JavascriptInterface
         public void exitGame() {
             runOnUiThread(() -> finish());
+        }
+
+        @JavascriptInterface
+        public void checkForUpdates() {
+            runOnUiThread(() -> requestUpdateCheck(false));
+        }
+
+        @JavascriptInterface
+        public void checkForUpdatesNow() {
+            runOnUiThread(() -> requestUpdateCheck(true));
+        }
+
+        @JavascriptInterface
+        public String getVersion() {
+            return BuildConfig.VERSION_NAME;
+        }
+
+        @JavascriptInterface
+        public void openReleasePage(String url) {
+            if (!isAllowedReleaseUrl(url)) {
+                if (BuildConfig.DEBUG) Log.w(TAG, "Blocked release URL: " + url);
+                return;
+            }
+            runOnUiThread(() -> {
+                try {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                    intent.addCategory(Intent.CATEGORY_BROWSABLE);
+                    startActivity(intent);
+                } catch (ActivityNotFoundException error) {
+                    Log.w(TAG, "No browser is available for the release page.", error);
+                }
+            });
         }
     }
 }

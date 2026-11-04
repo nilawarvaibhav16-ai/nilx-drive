@@ -47,7 +47,12 @@ async function boot() {
             deployWorld: (world) => game?.deployWorld(world),
             setSystem: (name, value) => game?.setSystem(name, value),
             toggleCamera: () => game?.toggleCamera(),
-            hostPause: () => game?.hostPause()
+            hostPause: () => game?.hostPause(),
+            openUpdate: (url) => {
+                if (window.NilxHost && typeof window.NilxHost.openReleasePage === 'function') {
+                    window.NilxHost.openReleasePage(url);
+                }
+            }
         };
 
         ui = new UIController({
@@ -76,6 +81,9 @@ async function boot() {
             handleAndroidBack: () => ui.handleBack(),
             hostPause: () => game.hostPause(),
             start: () => game.start(),
+            showUpdate: (info) => ui.showUpdate(info),
+            checkForUpdates: () => window.NilxHost?.checkForUpdatesNow?.(),
+            getVersion: () => window.NilxHost?.getVersion?.() ?? null,
             getState: () => game.state,
             getSnapshot: () => ({
                 state: game.state,
@@ -97,6 +105,21 @@ async function boot() {
             vehicle: initialVehicle.id,
             world: initialWorld.id
         });
+
+        const hostVersion = window.NilxHost?.getVersion?.();
+        if (hostVersion) {
+            const buildLabel = document.getElementById('build-label');
+            if (buildLabel) buildLabel.textContent = `BUILD ${hostVersion}`;
+        }
+
+        window.setTimeout(() => {
+            if (!window.NilxHost || typeof window.NilxHost.checkForUpdates !== 'function') return;
+            try {
+                window.NilxHost.checkForUpdates();
+            } catch (error) {
+                console.warn('[NilxDrive] update check unavailable', error);
+            }
+        }, 700);
     } catch (error) {
         console.error('[NilxDrive] boot failed', error);
         const message = error instanceof Error ? error.message : String(error);
